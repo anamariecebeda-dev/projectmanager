@@ -78,6 +78,7 @@ function durSec(start,end){ if(!start||!end) return 0; const [a,b]=start.split("
 function weekWindow(startDay){ const now=new Date(); now.setHours(0,0,0,0); const diff=(now.getDay()-startDay+7)%7; const start=new Date(now); start.setDate(now.getDate()-diff); const end=new Date(start); end.setDate(start.getDate()+7); return {start,end}; }
 const inWin = (iso,w) => { const d=new Date(iso+"T00:00:00"); return d>=w.start && d<w.end; };
 function downloadJSON(obj,name){ const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
+function migrate(st){ if(!st) return st; if(st.timer && (!st.timers || !Object.keys(st.timers).length)){ st.timers=st.timers||{}; const tk=(st.tasks||[]).find(x=>x.id===st.timer.taskId); const ws=tk?tk.ws:st.activeWs; if(ws) st.timers[ws]=st.timer; } delete st.timer; if(!st.timers) st.timers={}; return st; }
 
 const seed = () => ({
   workspaces:[{id:"w1",name:"My Studio"}],
@@ -98,7 +99,7 @@ const seed = () => ({
     {id:"st4",label:"Completed"},
   ],
   settings:{ weeklyHours:40, weekStartDay:1, workDays:["mon","tue","wed","thu","fri"], currency:"$", rate:0 },
-  timer:null,
+  timers:{},
 });
 
 /* ============================ context ============================ */
@@ -158,20 +159,21 @@ function useScope(){
 /* ============================ Dashboard ============================ */
 function Dashboard({ now, go }){
   const { db, update } = useDB();
-  const { projects, tasks, projStats, projFinished, isDone } = useScope();
+  const { projects, tasks, projStats, projFinished, isDone, activeWs } = useScope();
   const [taskOpen,setTaskOpen]=useState(null);
-  const startTimer=(taskId)=>update(d=>{ if(d.timer){ const t=d.timer; const end=new Date(); const sec=Math.floor((end.getTime()-new Date(t.startedAt).getTime())/1000); const tk=d.tasks.find(x=>x.id===t.taskId); d.entries.unshift({id:uid(),taskId:t.taskId,taskName:tk?tk.name:"(task)",project:tk?tk.project:null,ws:tk?tk.ws:d.activeWs,date:t.date,start:t.startHM,end:pad(end.getHours())+":"+pad(end.getMinutes()),durationSec:sec,billed:false}); } const nw=new Date(); d.timer={taskId,startedAt:nw.toISOString(),date:todayISO(),startHM:pad(nw.getHours())+":"+pad(nw.getMinutes())}; });
+  const timer = db.timers?.[activeWs] || null;
+  const startTimer=(taskId)=>update(d=>{ if(!d.timers)d.timers={}; const tk=d.tasks.find(x=>x.id===taskId); const ws=tk?tk.ws:d.activeWs; const cur=d.timers[ws]; if(cur){ const end=new Date(); const sec=Math.floor((end.getTime()-new Date(cur.startedAt).getTime())/1000); const ct=d.tasks.find(x=>x.id===cur.taskId); d.entries.unshift({id:uid(),taskId:cur.taskId,taskName:ct?ct.name:"(task)",project:ct?ct.project:null,ws,date:cur.date,start:cur.startHM,end:pad(end.getHours())+":"+pad(end.getMinutes()),durationSec:sec,billed:false}); } const nw=new Date(); d.timers[ws]={taskId,startedAt:nw.toISOString(),date:todayISO(),startHM:pad(nw.getHours())+":"+pad(nw.getMinutes())}; });
   const s = db.settings;
   const win = weekWindow(s.weekStartDay);
 
-  const loggedSec = useMemo(()=> db.entries.filter(e=>inWin(e.date,win)).reduce((a,e)=>a+e.durationSec,0), [db.entries, s.weekStartDay]);
-  const runningExtra = db.timer ? Math.floor((now - new Date(db.timer.startedAt).getTime())/1000) : 0;
-  const totalSec = loggedSec + (db.timer && inWin(db.timer.date,win) ? runningExtra : 0);
+  const loggedSec = useMemo(()=> db.entries.filter(e=>e.ws===activeWs && inWin(e.date,win)).reduce((a,e)=>a+e.durationSec,0), [db.entries, s.weekStartDay, activeWs]);
+  const runningExtra = timer ? Math.floor((now - new Date(timer.startedAt).getTime())/1000) : 0;
+  const totalSec = loggedSec + (timer && inWin(timer.date,win) ? runningExtra : 0);
   const targetSec = s.weeklyHours*3600;
   const leftSec = targetSec - totalSec;
   const pct = Math.min(100, totalSec/targetSec*100);
 
-  const runningTask = db.timer ? db.tasks.find(t=>t.id===db.timer.taskId) : null;
+  const runningTask = timer ? db.tasks.find(t=>t.id===timer.taskId) : null;
   const today = todayISO();
   const todays = tasks.filter(t=>t.date===today && !isDone(t));
   const active = projects.filter(p=>!projFinished(p));
@@ -180,12 +182,12 @@ function Dashboard({ now, go }){
   const dateStr = `${DOW_FULL[dObj.getDay()]}, ${MON[dObj.getMonth()]} ${dObj.getDate()}, ${dObj.getFullYear()}`;
 
   const stop = ()=> update(d=>{
-    const t=d.timer; if(!t) return;
+    const t=d.timers?.[activeWs]; if(!t) return;
     const end=new Date(); const sec=Math.floor((end.getTime()-new Date(t.startedAt).getTime())/1000);
     const tk=d.tasks.find(x=>x.id===t.taskId);
-    d.entries.unshift({ id:uid(), taskId:t.taskId, taskName:tk?tk.name:"(task)", project:tk?tk.project:null, ws:tk?tk.ws:d.activeWs,
+    d.entries.unshift({ id:uid(), taskId:t.taskId, taskName:tk?tk.name:"(task)", project:tk?tk.project:null, ws:activeWs,
       date:t.date, start:t.startHM, end:`${pad(end.getHours())}:${pad(end.getMinutes())}`, durationSec:sec, billed:false });
-    d.timer=null;
+    delete d.timers[activeWs];
   });
 
   return (
@@ -215,8 +217,8 @@ function Dashboard({ now, go }){
 
       {/* running task */}
       <div className="card" style={{padding:18,display:"flex",alignItems:"center",gap:16,
-        borderColor:db.timer?C.warn:C.line, background:db.timer?C.warnBg:C.surface}}>
-        {db.timer ? (<>
+        borderColor:timer?C.warn:C.line, background:timer?C.warnBg:C.surface}}>
+        {timer ? (<>
           <span className="livedot"/>
           <div style={{flex:1}}>
             <div className="smallcap" style={{color:C.warn,fontWeight:800}}>NOW RUNNING</div>
@@ -241,7 +243,7 @@ function Dashboard({ now, go }){
           {todays.length===0 ? <div className="smallcap" style={{padding:"18px 0"}}>Nothing scheduled for today. Enjoy the calm. 🌤️</div> :
             <div style={{display:"grid",gap:9}}>{todays.map(t=>{
               const df=db.difficulties.find(d=>d.id===t.difficulty);
-              const running=db.timer?.taskId===t.id;
+              const running=(db.timers?.[t.ws])?.taskId===t.id;
               return <div key={t.id} className="rowh" onClick={()=>setTaskOpen(t.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:C.mist,borderRadius:10,borderLeft:`3px solid ${df?df.color:C.tintB}`,cursor:"pointer"}}>
                 <div style={{flex:1,fontWeight:600,fontSize:13.5}}>{t.name}</div>
                 <span className="chip" style={{background:"#fff",color:C.ink2,border:`1px solid ${C.line}`}}>{t.status}</span>
@@ -447,8 +449,8 @@ function TaskModal({ id, newProject, onClose }){
     });
   };
   const save=()=> { update(d=>{ const i=d.tasks.findIndex(t=>t.id===f.id); if(i>=0)d.tasks[i]=f; else d.tasks.push(f); }); onClose(); };
-  const del=()=> { if(confirm("Delete this task?")){ update(d=>{ d.tasks=d.tasks.filter(t=>t.id!==f.id); if(d.timer?.taskId===f.id)d.timer=null; }); onClose(); } };
-  const start=()=> { update(d=>{ const now=new Date(); d.timer={taskId:f.id,startedAt:now.toISOString(),date:todayISO(),startHM:`${pad(now.getHours())}:${pad(now.getMinutes())}`}; }); onClose(); };
+  const del=()=> { if(confirm("Delete this task?")){ update(d=>{ d.tasks=d.tasks.filter(t=>t.id!==f.id); if(d.timers?.[f.ws]?.taskId===f.id)delete d.timers[f.ws]; }); onClose(); } };
+  const start=()=> { update(d=>{ if(!d.timers)d.timers={}; const cur=d.timers[f.ws]; if(cur){ const end=new Date(); const sec=Math.floor((end.getTime()-new Date(cur.startedAt).getTime())/1000); const ct=d.tasks.find(x=>x.id===cur.taskId); d.entries.unshift({id:uid(),taskId:cur.taskId,taskName:ct?ct.name:"(task)",project:ct?ct.project:null,ws:f.ws,date:cur.date,start:cur.startHM,end:pad(end.getHours())+":"+pad(end.getMinutes()),durationSec:sec,billed:false}); } const now=new Date(); d.timers[f.ws]={taskId:f.id,startedAt:now.toISOString(),date:todayISO(),startHM:`${pad(now.getHours())}:${pad(now.getMinutes())}`}; }); onClose(); };
 
   return (
     <Modal title={existing?"Edit task":"New task"} onClose={onClose} w={620}
@@ -509,7 +511,7 @@ function TaskModal({ id, newProject, onClose }){
         {existing && <div style={{background:C.mist,borderRadius:10,padding:14,display:"flex",alignItems:"center",gap:14}}>
           <Clock3 size={18} style={{color:C.tintB}}/>
           <div style={{flex:1}}><div className="smallcap" style={{fontWeight:700}}>Tracked on this task</div><div className="mono" style={{fontSize:18,fontWeight:700}}>{fmtDur(taskSec)}</div></div>
-          {db.timer?.taskId===f.id ? <span className="chip" style={{background:C.warnBg,color:C.warn}}><span className="livedot"/>running</span> :
+          {(db.timers?.[f.ws])?.taskId===f.id ? <span className="chip" style={{background:C.warnBg,color:C.warn}}><span className="livedot"/>running</span> :
             <button className="btn btn-p btn-sm" onClick={start}><Play size={13}/> Start timer</button>}
         </div>}
       </div>
@@ -577,6 +579,17 @@ function TimeTracking(){
   const weekSec=entries.filter(e=>inWin(e.date,win)).reduce((a,e)=>a+e.durationSec,0);
   const [add,setAdd]=useState(false);
   const [f,setF]=useState({date:todayISO(),taskId:"",start:"09:00",end:"10:00"});
+  const [range,setRange]=useState("week");
+  const [cf,setCf]=useState(todayISO()); const [ct,setCt]=useState(todayISO());
+  const rangeWin=useMemo(()=>{
+    if(range==="all") return null;
+    if(range==="week") return win;
+    if(range==="lastweek"){ const st=new Date(win.start); st.setDate(st.getDate()-7); return {start:st,end:new Date(win.start)}; }
+    if(range==="month"){ const n=new Date(); return {start:new Date(n.getFullYear(),n.getMonth(),1), end:new Date(n.getFullYear(),n.getMonth()+1,1)}; }
+    const st=new Date(cf+"T00:00:00"); const en=new Date(ct+"T00:00:00"); en.setDate(en.getDate()+1); return {start:st,end:en};
+  },[range,cf,ct,s.weekStartDay]);
+  const shown = rangeWin ? entries.filter(e=>inWin(e.date,rangeWin)) : entries;
+  const shownSec = shown.reduce((a,e)=>a+e.durationSec,0);
 
   const save=()=> update(d=>{
     const tk=d.tasks.find(t=>t.id===f.taskId);
@@ -598,12 +611,25 @@ function TimeTracking(){
         <div style={{flex:1,minWidth:200,alignSelf:"center"}}><Bar value={weekSec/(s.weeklyHours*3600)*100} h={10}/></div>
       </div>
 
-      {entries.length===0 ? <Empty icon={<Timer size={22}/>} title="No time logged yet" sub="Start a timer from a task, or log an entry manually. Durations show as HH:MM:SS." /> :
+      {entries.length===0 ? <Empty icon={<Timer size={22}/>} title="No time logged yet" sub="Start a timer from a task, or log an entry manually. Durations show as HH:MM:SS." /> : <>
+        <div className="card" style={{padding:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {[["week","This week"],["lastweek","Last week"],["month","This month"],["all","All time"],["custom","Custom"]].map(([k,label])=>(
+              <button key={k} onClick={()=>setRange(k)} style={{padding:"7px 12px",borderRadius:8,fontSize:12.5,fontWeight:700,cursor:"pointer",border:`1px solid ${range===k?C.primary:C.line}`,background:range===k?C.primary:C.surface,color:range===k?"#fff":C.ink2}}>{label}</button>))}
+          </div>
+          {range==="custom" && <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <input className="inp" type="date" style={{width:150}} value={cf} onChange={e=>setCf(e.target.value)}/>
+            <span className="smallcap">to</span>
+            <input className="inp" type="date" style={{width:150}} value={ct} onChange={e=>setCt(e.target.value)}/>
+          </div>}
+          <div style={{marginLeft:"auto",fontSize:12.5,color:C.ink2}}><b>{shown.length}</b> {shown.length===1?"entry":"entries"} · <span className="mono" style={{fontWeight:700}}>{fmtDur(shownSec)}</span></div>
+        </div>
+        {shown.length===0 ? <div className="card" style={{padding:"34px 20px",textAlign:"center",color:C.muted,fontSize:13}}>No time tracked in this range.</div> :
         <div className="card" style={{overflow:"hidden"}}>
           <div style={{display:"grid",gridTemplateColumns:"120px 1fr 90px 90px 110px 40px",gap:0,padding:"11px 16px",background:C.mist,fontSize:11,fontWeight:800,letterSpacing:".04em",textTransform:"uppercase",color:C.muted}}>
             <div>Date</div><div>Task</div><div>Start</div><div>End</div><div>Duration</div><div/>
           </div>
-          {entries.map(e=>(
+          {shown.map(e=>(
             <div key={e.id} className="rowh" style={{display:"grid",gridTemplateColumns:"120px 1fr 90px 90px 110px 40px",gap:0,padding:"11px 16px",borderTop:`1px solid ${C.line}`,alignItems:"center",fontSize:13}}>
               <div>{fmtDateShort(e.date)}</div>
               <div style={{fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.taskName}</div>
@@ -612,6 +638,7 @@ function TimeTracking(){
               <button className="btn btn-icn btn-sm btn-d" onClick={()=>update(d=>{d.entries=d.entries.filter(x=>x.id!==e.id);})}><Trash2 size={13}/></button>
             </div>))}
         </div>}
+      </>}
 
       {add && <Modal title="Log time" onClose={()=>setAdd(false)}
         foot={<><button className="btn" onClick={()=>setAdd(false)}>Cancel</button><button className="btn btn-p" onClick={()=>{save();setAdd(false);}}>Save entry</button></>}>
@@ -633,13 +660,14 @@ function TimeTracking(){
 /* ============================ Calendar ============================ */
 function Calendar(){
   const { db } = useDB();
-  const { tasks } = useScope();
+  const { tasks, isDone } = useScope();
   const [cur,setCur]=useState(()=>{const d=new Date();return {y:d.getFullYear(),m:d.getMonth()};});
   const [dayOpen,setDayOpen]=useState(null);
+  const [hideDone,setHideDone]=useState(false);
   const first=new Date(cur.y,cur.m,1); const startPad=first.getDay(); const days=new Date(cur.y,cur.m+1,0).getDate();
   const cells=[]; for(let i=0;i<startPad;i++)cells.push(null); for(let d=1;d<=days;d++)cells.push(d);
   const iso=(d)=>`${cur.y}-${pad(cur.m+1)}-${pad(d)}`;
-  const tasksOn=(d)=> tasks.filter(t=>t.date===iso(d));
+  const tasksOn=(d)=> tasks.filter(t=>t.date===iso(d) && (!hideDone || !isDone(t)));
   const move=(n)=> setCur(c=>{let m=c.m+n,y=c.y;if(m<0){m=11;y--;}if(m>11){m=0;y++;}return{y,m};});
   const today=todayISO();
 
@@ -647,7 +675,10 @@ function Calendar(){
     <div style={{display:"grid",gap:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <h2 style={{margin:0,fontSize:20,fontWeight:800}}>Calendar</h2>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12.5,color:C.muted,cursor:"pointer",marginRight:2}}>
+            <input type="checkbox" checked={hideDone} onChange={e=>setHideDone(e.target.checked)}/> hide completed
+          </label>
           <button className="btn btn-icn" onClick={()=>move(-1)}><ChevronLeft size={16}/></button>
           <div style={{fontWeight:800,fontSize:15,minWidth:150,textAlign:"center"}}>{MON[cur.m]} {cur.y}</div>
           <button className="btn btn-icn" onClick={()=>move(1)}><ChevronRight size={16}/></button>
@@ -1088,7 +1119,7 @@ export default function App(){
   const userId = session?.user?.id || null;
 
   // load
-  useEffect(()=>{ if(!userId){ setDb(null); loaded.current=false; return; } (async()=>{ const doc=await loadDoc(userId); setDb({...seed(),...(doc||{})}); loaded.current=true; })(); },[userId]);
+  useEffect(()=>{ if(!userId){ setDb(null); loaded.current=false; return; } (async()=>{ const doc=await loadDoc(userId); setDb(migrate({...seed(),...(doc||{})})); loaded.current=true; })(); },[userId]);
   // persist
   useEffect(()=>{ if(!loaded.current||!db||!userId) return; const t=setTimeout(()=>{ saveDoc(userId,db); },600); return ()=>clearTimeout(t); },[db,userId]);
   // clock
