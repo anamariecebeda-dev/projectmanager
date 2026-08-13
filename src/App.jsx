@@ -79,6 +79,7 @@ function weekWindow(startDay){ const now=new Date(); now.setHours(0,0,0,0); cons
 const inWin = (iso,w) => { const d=new Date(iso+"T00:00:00"); return d>=w.start && d<w.end; };
 function downloadJSON(obj,name){ const blob=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
 function migrate(st){ if(!st) return st; if(st.timer && (!st.timers || !Object.keys(st.timers).length)){ st.timers=st.timers||{}; const tk=(st.tasks||[]).find(x=>x.id===st.timer.taskId); const ws=tk?tk.ws:st.activeWs; if(ws) st.timers[ws]=st.timer; } delete st.timer; if(!st.timers) st.timers={}; return st; }
+function downloadCSV(rows,name){ const bom="\uFEFF"; const csv=rows.map(r=>r.map(c=>{const s=String(c==null?"":c); return /[",\n\r]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join(",")).join("\r\n"); const blob=new Blob([bom+csv],{type:"text/csv;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
 
 const seed = () => ({
   workspaces:[{id:"w1",name:"My Studio"}],
@@ -590,6 +591,7 @@ function TimeTracking(){
   },[range,cf,ct,s.weekStartDay]);
   const shown = rangeWin ? entries.filter(e=>inWin(e.date,rangeWin)) : entries;
   const shownSec = shown.reduce((a,e)=>a+e.durationSec,0);
+  const exportCSV=()=>{ const rows=[["Date","Task","Start time","End time","Duration"]]; shown.forEach(e=>rows.push([e.date,e.taskName,e.start,e.end,fmtDur(e.durationSec)])); rows.push([]); rows.push(["","","","Total",fmtDur(shownSec)]); downloadCSV(rows,`time-log-${range}-${todayISO()}.csv`); };
 
   const save=()=> update(d=>{
     const tk=d.tasks.find(t=>t.id===f.taskId);
@@ -601,7 +603,10 @@ function TimeTracking(){
     <div style={{display:"grid",gap:16}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <h2 style={{margin:0,fontSize:20,fontWeight:800}}>Time tracking</h2>
-        <button className="btn btn-p" onClick={()=>{setF({date:todayISO(),taskId:"",start:"09:00",end:"10:00"});setAdd(true);}}><Plus size={15}/> Log time</button>
+        <div style={{display:"flex",gap:10}}>
+          <button className="btn" disabled={shown.length===0} onClick={exportCSV}><Download size={15}/> Export CSV</button>
+          <button className="btn btn-p" onClick={()=>{setF({date:todayISO(),taskId:"",start:"09:00",end:"10:00"});setAdd(true);}}><Plus size={15}/> Log time</button>
+        </div>
       </div>
 
       <div className="card" style={{padding:20,display:"flex",gap:30,flexWrap:"wrap"}}>
