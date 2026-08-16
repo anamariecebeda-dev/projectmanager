@@ -202,7 +202,7 @@ function Dashboard({ now, go }){
       <div className="card" style={{padding:24,background:`linear-gradient(140deg,${C.ink} 0%,${C.primaryDeep} 100%)`,color:"#fff",border:"none"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:8}}>
           <div style={{fontSize:12,fontWeight:800,letterSpacing:".08em",textTransform:"uppercase",opacity:.8}}>This week's fuel</div>
-          <div style={{fontSize:12,opacity:.75}}>Goal {s.weeklyHours}h · resets {DOW_FULL[s.weekStartDay]}</div>
+          <div style={{fontSize:12,opacity:.75}}>Goal {s.weeklyHours}h · {DOW_FULL[s.weekStartDay].slice(0,3)}–{DOW_FULL[(s.weekStartDay+6)%7].slice(0,3)} week</div>
         </div>
         <div style={{display:"flex",alignItems:"baseline",gap:12,margin:"16px 0 12px",flexWrap:"wrap"}}>
           <div className="mono" style={{fontSize:46,fontWeight:700,lineHeight:1,letterSpacing:"-.02em"}}>{fmtDur(Math.abs(leftSec))}</div>
@@ -975,7 +975,7 @@ function SettingsView(){
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
           <div><label className="lbl">Hours needed per week</label><input className="inp mono" type="number" value={s.weeklyHours} onChange={e=>set("weeklyHours",Math.max(1,+e.target.value))}/></div>
           <div><label className="lbl">Week starts on</label><select className="inp" value={s.weekStartDay} onChange={e=>set("weekStartDay",+e.target.value)}>
-            <option value={0}>Sunday</option><option value={1}>Monday</option></select></div>
+            {DOW_FULL.map((d,i)=><option key={i} value={i}>{d}</option>)}</select></div>
         </div>
         <div style={{marginTop:16}}><label className="lbl">Working days</label>
           <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>{DOW.map((d,i)=>{const on=s.workDays.includes(d);return(
